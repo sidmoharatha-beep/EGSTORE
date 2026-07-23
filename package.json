@@ -1,0 +1,19 @@
+{
+  "name": "egstore",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create egstore-db",
+    "db:schema": "wrangler d1 execute egstore-db --remote --file=./schema.sql",
+    "db:seed-items": "wrangler d1 execute egstore-db --remote --file=./seed_data.sql",
+    "db:seed-users": "wrangler d1 execute egstore-db --remote --file=./seed_users.sql",
+    "db:schema:local": "wrangler d1 execute egstore-db --local --file=./schema.sql",
+    "db:seed-items:local": "wrangler d1 execute egstore-db --local --file=./seed_data.sql",
+    "db:seed-users:local": "wrangler d1 execute egstore-db --local --file=./seed_users.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

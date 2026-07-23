@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EGSTORE - Engineering Store Inventory</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  @media print {
+    body * { visibility: hidden; }
+    #qr-print-area, #qr-print-area * { visibility: visible; }
+    #qr-print-area { position: absolute; top: 0; left: 0; width: 100%; }
+    .no-print { display: none !important; }
+  }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background:#f4f6f9; }
+  .navy { color:#1e3a5f; }
+  .bg-navy { background-color:#1e3a5f; }
+  .bg-orange { background-color:#e58e26; }
+  .badge-crit { background:#fdecea; color:#c0392b; }
+  .badge-most { background:#fdecea; color:#8e0000; font-weight:600; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div id="app"></div>
+
+<script>
+const API = ""; // same origin
+let state = { token: localStorage.getItem("eg_token") || null, user: JSON.parse(localStorage.getItem("eg_user") || "null"), view: "dashboard", page:1 };
+
+function saveAuth(token, user) {
+  state.token = token; state.user = user;
+  localStorage.setItem("eg_token", token);
+  localStorage.setItem("eg_user", JSON.stringify(user));
+}
+function logout() {
+  state.token = null; state.user = null;
+  localStorage.removeItem("eg_token"); localStorage.removeItem("eg_user");
+  render();
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  if (state.token) headers["Authorization"] = "Bearer " + state.token;
+  const res = await fetch(API + path, Object.assign({}, opts, { headers }));
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { logout(); throw new Error("Session expired"); }
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+function el(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstChild;
+}
+
+// ---------------- LOGIN ----------------
+function renderLogin() {
+  const app = document.getElementById("app");
+  app.innerHTML = "";
+  app.appendChild(el(`
+    <div class="min-h-screen flex items-center justify-center">
+      <div class="bg-white shadow-xl rounded-2xl p-10 w-96">
+        <div class="text-center mb-6">
+          <div class="text-3xl font-extrabold navy">EGSTORE</div>
+          <div class="text-sm text-gray-500">All Your Engineering Needs</div>
+        </div>
+        <div id="login-err" class="text-red-600 text-sm mb-3 hidden"></div>
+        <input id="li-user" placeholder="Username" class="w-full border rounded-lg px-3 py-2 mb-3" />
+        <input id="li-pass" type="password" placeholder="Password" class="w-full border rounded-lg px-3 py-2 mb-4" />
+        <button id="li-btn" class="w-full bg-navy text-white rounded-lg py-2 font-semibold">Log In</button>
+      </div>
+    </div>
+  `));
+  document.getElementById("li-btn").onclick = async () => {
+    const username = document.getElementById("li-user").value.trim();
+    const password = document.getElementById("li-pass").value;
+    try {
+      const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      saveAuth(data.token, data.user);
+      render();
+    } catch (e) {
+      const box = document.getElementById("login-err");
+      box.textContent = e.message; box.classList.remove("hidden");
+    }
+  };
+}
+
+// ---------------- SHELL ----------------
+function shell(contentHtml) {
+  const role = state.user.role;
+  const nav = [
+    { id: "dashboard", label: "Dashboard", roles: ["admin","store_incharge","issuer"] },
+    { id: "items", label: "Items", roles: ["admin","store_incharge","issuer"] },
+    { id: "issue", label: "Request / Issue", roles: ["admin","store_incharge","issuer"] },
+    { id: "approvals", label: "Approvals", roles: ["admin","store_incharge"] },
+    { id: "issuelog", label: "Issue Log", roles: ["admin","store_incharge"] },
+    { id: "indents", label: "Purchase Indents", roles: ["admin","store_incharge"] },
+    { id: "qrcodes", label: "QR Codes", roles: ["store_incharge"] },
+    { id: "bulkreceipt", label: "Bulk Receipt (AI)", roles: ["store_incharge"] },
+    { id: "users", label: "Users", roles: ["store_incharge"] },
+  ].filter(n => n.roles.includes(role));
+
+  return `
+    <div class="min-h-screen">
+      <header class="bg-navy text-white px-6 py-3 flex items-center justify-between shadow">
+        <div class="font-extrabold text-xl">EGSTORE</div>
+        <nav class="flex gap-1">
+          ${nav.map(n => `<button data-nav="${n.id}" class="px-3 py-1.5 rounded-lg text-sm ${state.view===n.id ? 'bg-orange font-semibold' : 'hover:bg-white/10'}">${n.label}</button>`).join("")}
+        </nav>
+        <div class="flex items-center gap-3 text-sm">
+          <span>${state.user.name} <span class="opacity-70">(${role.replace('_',' ')})</span></span>
+          <button id="logout-btn" class="bg-white/10 px-3 py-1 rounded-lg hover:bg-white/20">Log out</button>
+        </div>
+      </header>
+      <main class="p-6 max-w-7xl mx-auto">${contentHtml}</main>
+    </div>
+  `;
+}
+
+function bindShell() {
+  document.querySelectorAll("[data-nav]").forEach(btn => {
+    btn.onclick = () => { state.view = btn.getAttribute("data-nav"); state.page = 1; render(); };
+  });
+  document.getElementById("logout-btn").onclick = logout;
+}
+
+// ---------------- DASHBOARD ----------------
+async function renderDashboard() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`<div id="dash-content" class="text-gray-500">Loading...</div>`);
+  bindShell();
+  try {
+    const summary = await api("/api/dashboard/summary");
+    const low = await api("/api/dashboard/low-stock");
+    const cards = [
+      { label: "Total Items", value: summary.total_items, color: "bg-navy" },
+      { label: "Stock Value (₹)", value: summary.stock_value.toLocaleString("en-IN"), color: "bg-navy" },
+      { label: "Below Threshold", value: summary.low_stock_count, color: "bg-red-600" },
+      { label: "Pending Approvals", value: summary.pending_approvals, color: "bg-orange" },
+      { label: "Open Purchase Indents", value: summary.open_indents, color: "bg-orange" },
+    ];
+    const content = `
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        ${cards.map(c => `
+          <div class="rounded-xl p-4 text-white ${c.color} shadow">
+            <div class="text-2xl font-bold">${c.value}</div>
+            <div class="text-xs opacity-90 mt-1">${c.label}</div>
+          </div>`).join("")}
+      </div>
+      <div class="bg-white rounded-xl shadow p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-bold navy text-lg">Items Below Reorder Level (ROL)</h2>
+          ${state.user.role !== "issuer" ? `<button id="gen-indents" class="bg-orange text-white text-sm px-3 py-1.5 rounded-lg">Generate Purchase Indents</button>` : ""}
+        </div>
+        <div class="overflow-auto max-h-[480px]">
+        <table class="w-full text-sm">
+          <thead class="text-left text-gray-500 border-b sticky top-0 bg-white">
+            <tr><th class="py-2">SAP Code</th><th>Description</th><th>UoM</th><th>Current</th><th>ROL</th><th>ROQ</th><th>Critical</th><th>Vendor</th></tr>
+          </thead>
+          <tbody>
+            ${low.items.map(i => `
+              <tr class="border-b hover:bg-gray-50">
+                <td class="py-1.5 font-mono text-xs">${i.sap_code}</td>
+                <td>${i.description}</td>
+                <td>${i.uom||''}</td>
+                <td class="font-semibold text-red-600">${i.current_stock}</td>
+                <td>${i.rol}</td>
+                <td>${i.roq}</td>
+                <td>${i.critical_category ? `<span class="text-xs px-2 py-0.5 rounded-full ${i.critical_category==='MOST CRITICAL'?'badge-most':'badge-crit'}">${i.critical_category}</span>` : ''}</td>
+                <td class="text-xs text-gray-500">${i.vendor_name||''}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    `;
+    document.getElementById("dash-content").outerHTML = `<div>${content}</div>`;
+    const genBtn = document.getElementById("gen-indents");
+    if (genBtn) genBtn.onclick = async () => {
+      genBtn.disabled = true; genBtn.textContent = "Generating...";
+      try {
+        const r = await api("/api/purchase-indents/generate", { method: "POST" });
+        alert(`Created ${r.created} new purchase indent(s).`);
+        renderDashboard();
+      } catch (e) { alert(e.message); }
+    };
+  } catch (e) {
+    document.getElementById("dash-content").textContent = "Error: " + e.message;
+  }
+}
+
+// ---------------- ITEMS ----------------
+async function renderItems() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="bg-white rounded-xl shadow p-4">
+      <div class="flex gap-2 mb-4">
+        <input id="item-search" placeholder="Search by description, SAP code, machine..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <button id="item-search-btn" class="bg-navy text-white px-4 rounded-lg text-sm">Search</button>
+        ${state.user.role === "store_incharge" ? `<button id="new-item-btn" class="bg-orange text-white px-4 rounded-lg text-sm">+ New Item</button>` : ""}
+      </div>
+      <div id="new-item-form" class="hidden bg-gray-50 border rounded-lg p-4 mb-4"></div>
+      <div id="items-list" class="text-gray-500">Loading...</div>
+      <div id="items-pagination" class="flex justify-between items-center mt-3 text-sm"></div>
+    </div>
+  `);
+  bindShell();
+  document.getElementById("item-search-btn").onclick = () => { state.page = 1; loadItems(); };
+  document.getElementById("item-search").addEventListener("keydown", (e) => { if (e.key === "Enter") { state.page = 1; loadItems(); } });
+  const newBtn = document.getElementById("new-item-btn");
+  if (newBtn) newBtn.onclick = () => toggleNewItemForm();
+  await loadItems();
+}
+
+function toggleNewItemForm() {
+  const box = document.getElementById("new-item-form");
+  if (!box.classList.contains("hidden")) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2 text-sm">
+      <input id="ni-sap" placeholder="SAP Code (required)" class="border rounded-lg px-3 py-2 col-span-2" />
+      <input id="ni-uom" placeholder="UoM (e.g. NO, KG)" class="border rounded-lg px-3 py-2" />
+      <input id="ni-price" type="number" placeholder="Net price" class="border rounded-lg px-3 py-2" />
+      <input id="ni-desc" placeholder="Description (required)" class="border rounded-lg px-3 py-2 col-span-2" />
+      <input id="ni-stock" type="number" placeholder="Opening stock" class="border rounded-lg px-3 py-2" />
+      <input id="ni-rol" type="number" placeholder="Reorder Level (ROL)" class="border rounded-lg px-3 py-2" />
+      <input id="ni-roq" type="number" placeholder="Reorder Qty (ROQ)" class="border rounded-lg px-3 py-2" />
+      <input id="ni-vendor" placeholder="Vendor name" class="border rounded-lg px-3 py-2" />
+      <input id="ni-location" placeholder="Location" class="border rounded-lg px-3 py-2" />
+      <input id="ni-machine" placeholder="Machine/Equipment" class="border rounded-lg px-3 py-2" />
+    </div>
+    <div id="ni-err" class="text-red-600 text-sm mb-2 hidden"></div>
+    <button id="ni-submit" class="bg-navy text-white px-4 py-2 rounded-lg text-sm font-semibold">Create Item</button>
+  `;
+  document.getElementById("ni-submit").onclick = async () => {
+    const errBox = document.getElementById("ni-err");
+    const sap_code = document.getElementById("ni-sap").value.trim();
+    const description = document.getElementById("ni-desc").value.trim();
+    if (!sap_code || !description) { errBox.textContent = "SAP code and description are required."; errBox.classList.remove("hidden"); return; }
+    try {
+      await api("/api/items", { method: "POST", body: JSON.stringify({
+        sap_code, description,
+        uom: document.getElementById("ni-uom").value,
+        net_price: parseFloat(document.getElementById("ni-price").value) || 0,
+        current_stock: parseInt(document.getElementById("ni-stock").value) || 0,
+        rol: parseInt(document.getElementById("ni-rol").value) || 0,
+        roq: parseInt(document.getElementById("ni-roq").value) || 0,
+        vendor_name: document.getElementById("ni-vendor").value,
+        location: document.getElementById("ni-location").value,
+        machine_equipment: document.getElementById("ni-machine").value,
+      })});
+      toggleNewItemForm();
+      loadItems();
+    } catch (e) { errBox.textContent = e.message; errBox.classList.remove("hidden"); }
+  };
+}
+
+async function loadItems() {
+  const q = document.getElementById("item-search").value.trim();
+  try {
+    const data = await api(`/api/items?q=${encodeURIComponent(q)}&page=${state.page}&page_size=50`);
+    const listEl = document.getElementById("items-list");
+    listEl.innerHTML = `
+      <div class="overflow-auto max-h-[560px]">
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 border-b sticky top-0 bg-white">
+          <tr><th class="py-2">SAP Code</th><th>Description</th><th>UoM</th><th>Stock</th><th>ROL</th><th>Price</th><th>Location</th><th>Machine</th></tr>
+        </thead>
+        <tbody>
+          ${data.items.map(i => `
+            <tr class="border-b hover:bg-gray-50 cursor-pointer" data-open="${i.sap_code}">
+              <td class="py-1.5 font-mono text-xs">${i.sap_code}</td>
+              <td>${i.description}</td>
+              <td>${i.uom||''}</td>
+              <td class="${i.current_stock<=i.rol?'text-red-600 font-semibold':''}">${i.current_stock}</td>
+              <td>${i.rol}</td>
+              <td>₹${i.net_price}</td>
+              <td class="text-xs">${i.location||''}</td>
+              <td class="text-xs">${i.machine_equipment||''}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+      </div>
+    `;
+    listEl.querySelectorAll("[data-open]").forEach(row => {
+      row.onclick = () => { location.hash = "#/item/" + encodeURIComponent(row.getAttribute("data-open")); };
+    });
+    const totalPages = Math.max(1, Math.ceil(data.total / data.page_size));
+    document.getElementById("items-pagination").innerHTML = `
+      <div>${data.total} items found</div>
+      <div class="flex gap-2 items-center">
+        <button id="prev-page" class="px-3 py-1 border rounded-lg" ${state.page<=1?'disabled':''}>Prev</button>
+        <span>Page ${state.page} / ${totalPages}</span>
+        <button id="next-page" class="px-3 py-1 border rounded-lg" ${state.page>=totalPages?'disabled':''}>Next</button>
+      </div>
+    `;
+    document.getElementById("prev-page").onclick = () => { if (state.page>1){ state.page--; loadItems(); } };
+    document.getElementById("next-page").onclick = () => { if (state.page<totalPages){ state.page++; loadItems(); } };
+  } catch (e) {
+    document.getElementById("items-list").textContent = "Error: " + e.message;
+  }
+}
+
+// ---------------- ISSUE / REQUEST ----------------
+async function renderIssue() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-xl shadow p-4">
+        <h2 class="font-bold navy mb-3">New Issue Request</h2>
+        <div id="issue-err" class="text-red-600 text-sm mb-2 hidden"></div>
+        <input id="iss-search" placeholder="Search item by SAP code or description" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <div id="iss-results" class="text-sm mb-3 max-h-40 overflow-auto border rounded-lg divide-y hidden"></div>
+        <div id="iss-selected" class="text-sm mb-3 hidden p-2 bg-gray-50 rounded-lg"></div>
+        <input id="iss-qty" type="number" min="1" placeholder="Quantity" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <input id="iss-machine" placeholder="Machine / equipment (optional)" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <textarea id="iss-purpose" placeholder="Purpose / remarks" class="w-full border rounded-lg px-3 py-2 mb-3 text-sm"></textarea>
+        <button id="iss-submit" class="bg-orange text-white px-4 py-2 rounded-lg font-semibold" disabled>Submit Request</button>
+      </div>
+      <div class="bg-white rounded-xl shadow p-4">
+        <h2 class="font-bold navy mb-3">My Requests</h2>
+        <div id="my-requests" class="text-sm">Loading...</div>
+      </div>
+    </div>
+  `);
+  bindShell();
+  let selected = null;
+  const resultsBox = document.getElementById("iss-results");
+  const selectedBox = document.getElementById("iss-selected");
+  const submitBtn = document.getElementById("iss-submit");
+
+  if (state.prefillItem) {
+    selected = state.prefillItem;
+    selectedBox.innerHTML = `<b>${selected.description}</b><br><span class="text-xs text-gray-500">${selected.sap_code} · Available: ${selected.current_stock} ${selected.uom||''}</span>`;
+    selectedBox.classList.remove("hidden");
+    document.getElementById("iss-search").value = selected.description;
+    submitBtn.disabled = false;
+    state.prefillItem = null;
+  }
+
+  document.getElementById("iss-search").addEventListener("input", async (e) => {
+    const q = e.target.value.trim();
+    if (q.length < 2) { resultsBox.classList.add("hidden"); return; }
+    const data = await api(`/api/items?q=${encodeURIComponent(q)}&page_size=15`);
+    resultsBox.innerHTML = data.items.map(i => `
+      <div data-code="${i.sap_code}" class="p-2 hover:bg-gray-50 cursor-pointer">
+        <div class="font-medium">${i.description}</div>
+        <div class="text-xs text-gray-500">${i.sap_code} · Stock: ${i.current_stock} ${i.uom||''}</div>
+      </div>`).join("") || `<div class="p-2 text-gray-400">No matches</div>`;
+    resultsBox.classList.remove("hidden");
+    resultsBox.querySelectorAll("[data-code]").forEach(row => {
+      row.onclick = () => {
+        const code = row.getAttribute("data-code");
+        selected = data.items.find(i => i.sap_code === code);
+        selectedBox.innerHTML = `<b>${selected.description}</b><br><span class="text-xs text-gray-500">${selected.sap_code} · Available: ${selected.current_stock} ${selected.uom||''}</span>`;
+        selectedBox.classList.remove("hidden");
+        resultsBox.classList.add("hidden");
+        document.getElementById("iss-search").value = selected.description;
+        submitBtn.disabled = false;
+      };
+    });
+  });
+
+  submitBtn.onclick = async () => {
+    const errBox = document.getElementById("issue-err");
+    errBox.classList.add("hidden");
+    const qty = parseInt(document.getElementById("iss-qty").value);
+    if (!selected || !qty || qty <= 0) { errBox.textContent = "Select an item and enter a valid quantity."; errBox.classList.remove("hidden"); return; }
+    try {
+      await api("/api/issues", { method: "POST", body: JSON.stringify({
+        sap_code: selected.sap_code, qty_requested: qty,
+        purpose: document.getElementById("iss-purpose").value,
+        machine_ref: document.getElementById("iss-machine").value,
+      })});
+      selected = null; submitBtn.disabled = true;
+      document.getElementById("iss-search").value = "";
+      document.getElementById("iss-qty").value = "";
+      document.getElementById("iss-purpose").value = "";
+      document.getElementById("iss-machine").value = "";
+      selectedBox.classList.add("hidden");
+      loadMyRequests();
+    } catch (e) {
+      errBox.textContent = e.message; errBox.classList.remove("hidden");
+    }
+  };
+
+  async function loadMyRequests() {
+    const box = document.getElementById("my-requests");
+    try {
+      const data = await api("/api/issues?mine=true");
+      box.innerHTML = data.issues.length ? `
+        <div class="divide-y max-h-[500px] overflow-auto">
+        ${data.issues.map(i => `
+          <div class="py-2">
+            <div class="flex justify-between">
+              <span class="font-medium">${i.description}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full ${statusColor(i.status)}">${i.status}</span>
+            </div>
+            <div class="text-xs text-gray-500">Qty: ${i.qty_requested} · ${new Date(i.created_at).toLocaleString()}</div>
+          </div>`).join("")}
+        </div>` : `<div class="text-gray-400">No requests yet.</div>`;
+    } catch (e) { box.textContent = "Error: " + e.message; }
+  }
+  loadMyRequests();
+}
+
+function statusColor(s) {
+  return { pending: "bg-yellow-100 text-yellow-800", issued: "bg-green-100 text-green-800",
+    rejected: "bg-red-100 text-red-800", approved: "bg-blue-100 text-blue-800" }[s] || "bg-gray-100";
+}
+
+// ---------------- APPROVALS ----------------
+async function renderApprovals() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`<div class="bg-white rounded-xl shadow p-4"><h2 class="font-bold navy mb-3">Pending Approvals</h2><div id="appr-list">Loading...</div></div>`);
+  bindShell();
+  await loadApprovals();
+}
+async function loadApprovals() {
+  const box = document.getElementById("appr-list");
+  try {
+    const data = await api("/api/issues?status=pending");
+    box.innerHTML = data.issues.length ? `
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 border-b"><tr><th class="py-2">Item</th><th>Qty</th><th>Requested By</th><th>Purpose</th><th>Stock</th><th>Date</th><th></th></tr></thead>
+        <tbody>
+        ${data.issues.map(i => `
+          <tr class="border-b">
+            <td class="py-2">${i.description}<div class="text-xs text-gray-400 font-mono">${i.sap_code}</div></td>
+            <td>${i.qty_requested}</td>
+            <td>${i.requested_by_name}</td>
+            <td class="text-xs">${i.purpose||''}${i.machine_ref?` · ${i.machine_ref}`:''}</td>
+            <td class="${i.current_stock<i.qty_requested?'text-red-600 font-semibold':''}">${i.current_stock}</td>
+            <td class="text-xs">${new Date(i.created_at).toLocaleString()}</td>
+            <td class="flex gap-2">
+              <button data-approve="${i.id}" class="bg-green-600 text-white px-2 py-1 rounded text-xs">Approve</button>
+              <button data-reject="${i.id}" class="bg-red-600 text-white px-2 py-1 rounded text-xs">Reject</button>
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>` : `<div class="text-gray-400">No pending requests.</div>`;
+    box.querySelectorAll("[data-approve]").forEach(btn => btn.onclick = async () => {
+      try { await api(`/api/issues/${btn.getAttribute("data-approve")}/approve`, { method: "POST" }); loadApprovals(); }
+      catch (e) { alert(e.message); }
+    });
+    box.querySelectorAll("[data-reject]").forEach(btn => btn.onclick = async () => {
+      const remarks = prompt("Reason for rejection (optional):") || "";
+      try { await api(`/api/issues/${btn.getAttribute("data-reject")}/reject`, { method: "POST", body: JSON.stringify({ remarks }) }); loadApprovals(); }
+      catch (e) { alert(e.message); }
+    });
+  } catch (e) { box.textContent = "Error: " + e.message; }
+}
+
+// ---------------- PURCHASE INDENTS ----------------
+async function renderIndents() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="bg-white rounded-xl shadow p-4">
+      <div class="flex justify-between mb-3">
+        <h2 class="font-bold navy">Purchase Indents</h2>
+        <button id="gen-btn" class="bg-orange text-white text-sm px-3 py-1.5 rounded-lg">Generate from Low Stock</button>
+      </div>
+      <div id="indent-list">Loading...</div>
+    </div>
+  `);
+  bindShell();
+  document.getElementById("gen-btn").onclick = async () => {
+    try { const r = await api("/api/purchase-indents/generate", { method: "POST" }); alert(`Created ${r.created} indent(s).`); loadIndents(); }
+    catch (e) { alert(e.message); }
+  };
+  await loadIndents();
+}
+async function loadIndents() {
+  const box = document.getElementById("indent-list");
+  try {
+    const data = await api("/api/purchase-indents");
+    box.innerHTML = data.indents.length ? `
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 border-b"><tr><th class="py-2">Item</th><th>Suggested Qty</th><th>Current Stock</th><th>Vendor</th><th>Status</th><th>Date</th><th></th></tr></thead>
+        <tbody>
+        ${data.indents.map(i => `
+          <tr class="border-b">
+            <td class="py-2">${i.description}<div class="text-xs text-gray-400 font-mono">${i.sap_code}</div></td>
+            <td>${i.qty_suggested} ${i.uom||''}</td>
+            <td>${i.current_stock}</td>
+            <td class="text-xs">${i.vendor_name||'-'}</td>
+            <td><span class="text-xs px-2 py-0.5 rounded-full ${statusColor(i.status)}">${i.status}</span></td>
+            <td class="text-xs">${new Date(i.created_at).toLocaleDateString()}</td>
+            <td>
+              ${i.status==='pending' ? `<button data-mark-ordered="${i.id}" class="bg-blue-600 text-white px-2 py-1 rounded text-xs">Mark Ordered</button>` : ''}
+              ${i.status==='ordered' ? `<button data-mark-received="${i.id}" data-code="${i.sap_code}" class="bg-green-600 text-white px-2 py-1 rounded text-xs">Receive Stock</button>` : ''}
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>` : `<div class="text-gray-400">No purchase indents.</div>`;
+    box.querySelectorAll("[data-mark-ordered]").forEach(btn => btn.onclick = async () => {
+      await api(`/api/purchase-indents/${btn.getAttribute("data-mark-ordered")}`, { method: "PUT", body: JSON.stringify({ status: "ordered" }) });
+      loadIndents();
+    });
+    box.querySelectorAll("[data-mark-received]").forEach(btn => btn.onclick = async () => {
+      const qty = prompt("Quantity received:");
+      if (!qty || isNaN(qty)) return;
+      await api("/api/stock/receipt", { method: "POST", body: JSON.stringify({
+        sap_code: btn.getAttribute("data-code"), qty: parseInt(qty),
+        indent_id: parseInt(btn.getAttribute("data-mark-received")), notes: "Received against purchase indent" }) });
+      loadIndents();
+    });
+  } catch (e) { box.textContent = "Error: " + e.message; }
+}
+
+// ---------------- USERS ----------------
+async function renderUsers() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div class="bg-white rounded-xl shadow p-4">
+        <h2 class="font-bold navy mb-3">Add User</h2>
+        <div id="user-err" class="text-red-600 text-sm mb-2 hidden"></div>
+        <input id="u-name" placeholder="Full name" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <input id="u-username" placeholder="Username" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <input id="u-pass" type="password" placeholder="Password" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+        <select id="u-role" class="w-full border rounded-lg px-3 py-2 mb-3 text-sm">
+          <option value="issuer">Issuer</option>
+          <option value="store_incharge">Store Incharge</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button id="u-submit" class="bg-orange text-white px-4 py-2 rounded-lg font-semibold w-full">Create User</button>
+      </div>
+      <div class="lg:col-span-2 bg-white rounded-xl shadow p-4">
+        <h2 class="font-bold navy mb-3">All Users</h2>
+        <div id="user-list">Loading...</div>
+      </div>
+    </div>
+  `);
+  bindShell();
+  document.getElementById("u-submit").onclick = async () => {
+    const errBox = document.getElementById("user-err");
+    try {
+      await api("/api/users", { method: "POST", body: JSON.stringify({
+        name: document.getElementById("u-name").value,
+        username: document.getElementById("u-username").value,
+        password: document.getElementById("u-pass").value,
+        role: document.getElementById("u-role").value,
+      })});
+      ["u-name","u-username","u-pass"].forEach(id => document.getElementById(id).value = "");
+      loadUsers();
+    } catch (e) { errBox.textContent = e.message; errBox.classList.remove("hidden"); }
+  };
+  await loadUsers();
+}
+async function loadUsers() {
+  const box = document.getElementById("user-list");
+  try {
+    const data = await api("/api/users");
+    box.innerHTML = `
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 border-b"><tr><th class="py-2">Name</th><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+        <tbody>${data.users.map(u => `
+          <tr class="border-b">
+            <td class="py-2">${u.name}</td><td>${u.username}</td><td>${u.role}</td>
+            <td class="text-xs">${new Date(u.created_at).toLocaleDateString()}</td>
+            <td><button data-reset="${u.id}" class="text-xs bg-navy text-white px-2 py-1 rounded">Reset Password</button></td>
+          </tr>
+        `).join("")}</tbody>
+      </table>`;
+    box.querySelectorAll("[data-reset]").forEach(btn => btn.onclick = async () => {
+      const pw = prompt("New password for this user (min 6 characters):");
+      if (!pw) return;
+      try {
+        await api(`/api/users/${btn.getAttribute("data-reset")}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: pw }) });
+        alert("Password reset.");
+      } catch (e) { alert(e.message); }
+    });
+  } catch (e) { box.textContent = "Error: " + e.message; }
+}
+
+// ---------------- ITEM DETAIL (also the QR-scan landing page) ----------------
+async function renderItemDetail() {
+  const app = document.getElementById("app");
+  const code = state.selectedItemCode;
+  app.innerHTML = shell(`<div id="detail-box" class="text-gray-500">Loading item...</div>`);
+  bindShell();
+  const box = document.getElementById("detail-box");
+  try {
+    const data = await api(`/api/items/${encodeURIComponent(code)}`);
+    const i = data.item;
+    const canManage = state.user.role === "store_incharge" || state.user.role === "admin";
+    box.innerHTML = `
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 bg-white rounded-xl shadow p-5">
+          <div class="flex justify-between items-start mb-1">
+            <div>
+              <div class="text-xs text-gray-400 font-mono">${i.sap_code}</div>
+              <h1 class="text-xl font-bold navy">${i.description}</h1>
+            </div>
+            <div class="text-3xl font-bold ${i.current_stock<=i.rol?'text-red-600':'text-green-600'}">${i.current_stock}<span class="text-sm text-gray-400 ml-1">${i.uom||''}</span></div>
+          </div>
+          ${i.critical_category ? `<span class="text-xs px-2 py-0.5 rounded-full ${i.critical_category==='MOST CRITICAL'?'badge-most':'badge-crit'}">${i.critical_category}</span>` : ''}
+          <div class="grid grid-cols-2 gap-3 text-sm mt-4">
+            <div><div class="text-gray-400 text-xs">Reorder Level (ROL)</div><div>${i.rol}</div></div>
+            <div><div class="text-gray-400 text-xs">Reorder Qty (ROQ)</div><div>${i.roq}</div></div>
+            <div><div class="text-gray-400 text-xs">Net Price</div><div>₹${i.net_price}</div></div>
+            <div><div class="text-gray-400 text-xs">Location</div><div>${i.location||'-'}</div></div>
+            <div><div class="text-gray-400 text-xs">Machine/Equipment</div><div>${i.machine_equipment||'-'}</div></div>
+            <div><div class="text-gray-400 text-xs">Sub Equipment</div><div>${i.sub_equipment||'-'}</div></div>
+            <div><div class="text-gray-400 text-xs">Vendor</div><div>${i.vendor_name||'-'}</div></div>
+            <div><div class="text-gray-400 text-xs">Vendor Contact</div><div>${i.vendor_phone||i.vendor_email||'-'}</div></div>
+          </div>
+
+          ${!canManage ? `
+            <button id="detail-request" class="mt-5 bg-orange text-white px-4 py-2 rounded-lg font-semibold text-sm">Request Issue for this Item</button>
+          ` : `
+            <div class="mt-5 border-t pt-4">
+              <h3 class="font-semibold navy mb-2 text-sm">Store Incharge Actions</h3>
+              <div class="flex flex-wrap gap-2 mb-3">
+                <input id="det-receive-qty" type="number" min="1" placeholder="Qty received" class="border rounded-lg px-3 py-2 text-sm w-40" />
+                <button id="det-receive-btn" class="bg-green-600 text-white px-3 py-2 rounded-lg text-sm">Receive Stock</button>
+              </div>
+              <div class="flex flex-wrap gap-2 items-end">
+                <div><label class="text-xs text-gray-400">ROL</label><input id="det-rol" type="number" value="${i.rol}" class="border rounded-lg px-3 py-2 text-sm w-28 block" /></div>
+                <div><label class="text-xs text-gray-400">ROQ</label><input id="det-roq" type="number" value="${i.roq}" class="border rounded-lg px-3 py-2 text-sm w-28 block" /></div>
+                <button id="det-save-threshold" class="bg-navy text-white px-3 py-2 rounded-lg text-sm">Save Threshold</button>
+              </div>
+              <div id="det-msg" class="text-sm mt-2"></div>
+            </div>
+          `}
+        </div>
+        <div class="bg-white rounded-xl shadow p-5">
+          <h3 class="font-semibold navy mb-2 text-sm">Recent Stock Ledger</h3>
+          <div class="text-sm divide-y max-h-[420px] overflow-auto">
+            ${data.history.length ? data.history.map(h => `
+              <div class="py-2 flex justify-between">
+                <div>
+                  <div class="capitalize font-medium">${h.txn_type}</div>
+                  <div class="text-xs text-gray-400">${new Date(h.created_at).toLocaleString()}</div>
+                </div>
+                <div class="text-right">
+                  <div class="${h.qty_change<0?'text-red-600':'text-green-600'} font-semibold">${h.qty_change>0?'+':''}${h.qty_change}</div>
+                  <div class="text-xs text-gray-400">bal: ${h.balance_after}</div>
+                </div>
+              </div>`).join("") : `<div class="text-gray-400">No transactions yet.</div>`}
+          </div>
+        </div>
+      </div>
+    `;
+
+    const reqBtn = document.getElementById("detail-request");
+    if (reqBtn) reqBtn.onclick = () => { state.view = "issue"; state.prefillItem = i; location.hash = ""; render(); };
+
+    const recvBtn = document.getElementById("det-receive-btn");
+    if (recvBtn) recvBtn.onclick = async () => {
+      const qty = parseInt(document.getElementById("det-receive-qty").value);
+      if (!qty || qty <= 0) return;
+      try {
+        await api("/api/stock/receipt", { method: "POST", body: JSON.stringify({ sap_code: code, qty, notes: "Received via item screen (QR scan)" }) });
+        renderItemDetail();
+      } catch (e) { document.getElementById("det-msg").textContent = e.message; }
+    };
+    const saveBtn = document.getElementById("det-save-threshold");
+    if (saveBtn) saveBtn.onclick = async () => {
+      const rol = parseInt(document.getElementById("det-rol").value) || 0;
+      const roq = parseInt(document.getElementById("det-roq").value) || 0;
+      try {
+        await api(`/api/items/${encodeURIComponent(code)}`, { method: "PUT", body: JSON.stringify({ rol, roq }) });
+        document.getElementById("det-msg").innerHTML = `<span class="text-green-600">Threshold saved.</span>`;
+      } catch (e) { document.getElementById("det-msg").textContent = e.message; }
+    };
+  } catch (e) {
+    box.textContent = "Error: " + e.message;
+  }
+}
+
+// ---------------- QR CODES (store incharge: generate + print rack labels) ----------------
+async function renderQRCodes() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="bg-white rounded-xl shadow p-4 no-print">
+      <h2 class="font-bold navy mb-3">Generate QR Codes for Item Racks</h2>
+      <p class="text-sm text-gray-500 mb-3">Search items, select the ones you want to print, then print. Each code opens straight to that item's screen when scanned on this app's URL.</p>
+      <div class="flex gap-2 mb-3">
+        <input id="qr-search" placeholder="Search by description, SAP code, machine..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <button id="qr-search-btn" class="bg-navy text-white px-4 rounded-lg text-sm">Search</button>
+      </div>
+      <div id="qr-results" class="text-sm max-h-80 overflow-auto border rounded-lg divide-y mb-3"></div>
+      <div class="flex gap-2">
+        <button id="qr-select-all" class="border px-3 py-2 rounded-lg text-sm">Select All Shown</button>
+        <button id="qr-generate" class="bg-orange text-white px-4 py-2 rounded-lg text-sm font-semibold">Generate Labels (<span id="qr-count">0</span> selected)</button>
+        <button id="qr-print" class="hidden bg-navy text-white px-4 py-2 rounded-lg text-sm font-semibold">Print</button>
+      </div>
+    </div>
+    <div id="qr-print-area" class="mt-6 grid grid-cols-3 gap-4"></div>
+  `);
+  bindShell();
+  let selected = {};
+  let lastResults = [];
+
+  async function search() {
+    const q = document.getElementById("qr-search").value.trim();
+    const data = await api(`/api/items?q=${encodeURIComponent(q)}&page_size=100`);
+    lastResults = data.items;
+    document.getElementById("qr-results").innerHTML = data.items.map(i => `
+      <label class="flex items-center gap-2 p-2 hover:bg-gray-50 cursor-pointer text-xs">
+        <input type="checkbox" data-code="${i.sap_code}" ${selected[i.sap_code] ? "checked" : ""} />
+        <span class="font-mono">${i.sap_code}</span> — ${i.description}
+      </label>
+    `).join("") || `<div class="p-2 text-gray-400">No matches</div>`;
+    document.querySelectorAll("#qr-results input[type=checkbox]").forEach(cb => {
+      cb.onchange = () => {
+        const item = lastResults.find(i => i.sap_code === cb.getAttribute("data-code"));
+        if (cb.checked) selected[item.sap_code] = item; else delete selected[item.sap_code];
+        updateCount();
+      };
+    });
+  }
+  function updateCount() { document.getElementById("qr-count").textContent = Object.keys(selected).length; }
+
+  document.getElementById("qr-search-btn").onclick = search;
+  document.getElementById("qr-search").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+  document.getElementById("qr-select-all").onclick = () => { lastResults.forEach(i => selected[i.sap_code] = i); search(); updateCount(); };
+
+  document.getElementById("qr-generate").onclick = async () => {
+    const items = Object.values(selected);
+    if (!items.length) { alert("Select at least one item."); return; }
+    const area = document.getElementById("qr-print-area");
+    area.innerHTML = "";
+    const baseUrl = location.origin + location.pathname;
+    for (const item of items) {
+      const card = document.createElement("div");
+      card.className = "border rounded-lg p-3 text-center flex flex-col items-center";
+      const canvas = document.createElement("canvas");
+      card.appendChild(canvas);
+      const label = document.createElement("div");
+      label.className = "mt-2 text-xs";
+      label.innerHTML = `<div class="font-mono font-semibold">${item.sap_code}</div><div>${item.description}</div>`;
+      card.appendChild(label);
+      area.appendChild(card);
+      await QRCode.toCanvas(canvas, `${baseUrl}#/item/${encodeURIComponent(item.sap_code)}`, { width: 140 });
+    }
+    document.getElementById("qr-print").classList.remove("hidden");
+  };
+  document.getElementById("qr-print").onclick = () => window.print();
+}
+
+// ---------------- BULK RECEIPT (AI-assisted Excel upload) ----------------
+async function renderBulkReceipt() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="bg-white rounded-xl shadow p-4 mb-4">
+      <h2 class="font-bold navy mb-2">Bulk Receipt from Excel (AI-assisted)</h2>
+      <p class="text-sm text-gray-500 mb-3">Upload the purchase/GRN excel as-is — any column layout. AI will read it into a list of SAP code / description / quantity. Review and correct before applying; nothing is saved until you confirm.</p>
+      <input id="br-file" type="file" accept=".xlsx,.xls,.csv" class="text-sm" />
+      <div id="br-status" class="text-sm mt-2"></div>
+    </div>
+    <div id="br-preview"></div>
+  `);
+  bindShell();
+
+  document.getElementById("br-file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const statusBox = document.getElementById("br-status");
+    statusBox.textContent = "Reading file...";
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" })
+        .map(r => r.map(c => String(c)))
+        .filter(r => r.some(c => c.trim() !== ""));
+      if (!rows.length) { statusBox.textContent = "No data found in the file."; return; }
+      statusBox.textContent = `Parsed ${rows.length} rows. Asking AI to extract items...`;
+      const data = await api("/api/ai/bulk-receipt/parse", { method: "POST", body: JSON.stringify({ rows }) });
+      statusBox.innerHTML = `<span class="text-green-600">Extracted ${data.preview.length} item lines from ${data.rows_seen} rows read.</span>`;
+      renderPreview(data.preview);
+    } catch (err) {
+      statusBox.innerHTML = `<span class="text-red-600">${err.message}</span>`;
+    }
+  });
+
+  function renderPreview(preview) {
+    const box = document.getElementById("br-preview");
+    box.innerHTML = `
+      <div class="bg-white rounded-xl shadow p-4">
+        <table class="w-full text-sm">
+          <thead class="text-left text-gray-500 border-b">
+            <tr><th class="py-2">SAP Code</th><th>Description</th><th>Qty Received</th><th>Status</th></tr>
+          </thead>
+          <tbody id="br-rows">
+            ${preview.map((p, idx) => `
+              <tr class="border-b" data-idx="${idx}">
+                <td class="py-1"><input class="border rounded px-2 py-1 text-xs w-32 font-mono" data-field="sap_code" value="${p.sap_code}" /></td>
+                <td><input class="border rounded px-2 py-1 text-xs w-full" data-field="description" value="${p.description.replace(/"/g,'&quot;')}" /></td>
+                <td><input type="number" class="border rounded px-2 py-1 text-xs w-20" data-field="qty" value="${p.qty}" /></td>
+                <td><span class="text-xs px-2 py-0.5 rounded-full ${p.status==='new'?'bg-blue-100 text-blue-800':'bg-gray-100 text-gray-700'}">${p.status==='new'?'new item':'add to stock'}</span></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <button id="br-apply" class="mt-4 bg-orange text-white px-4 py-2 rounded-lg font-semibold text-sm">Confirm & Apply to Stock</button>
+        <div id="br-apply-msg" class="text-sm mt-2"></div>
+      </div>
+    `;
+    document.getElementById("br-apply").onclick = async () => {
+      const rows = document.querySelectorAll("#br-rows tr");
+      const items = Array.from(rows).map(tr => ({
+        sap_code: tr.querySelector('[data-field=sap_code]').value.trim(),
+        description: tr.querySelector('[data-field=description]').value.trim(),
+        qty: parseInt(tr.querySelector('[data-field=qty]').value) || 0,
+      })).filter(i => i.qty > 0);
+      try {
+        const res = await api("/api/ai/bulk-receipt/apply", { method: "POST", body: JSON.stringify({ items }) });
+        document.getElementById("br-apply-msg").innerHTML =
+          `<span class="text-green-600">Done — ${res.summary.updated} item(s) restocked, ${res.summary.created} new item(s) created, ${res.summary.skipped} skipped.</span>`;
+      } catch (e) {
+        document.getElementById("br-apply-msg").innerHTML = `<span class="text-red-600">${e.message}</span>`;
+      }
+    };
+  }
+}
+
+// ---------------- ISSUE LOG (full history + CSV download: who issued what, when, why) ----------------
+async function renderIssueLog() {
+  const app = document.getElementById("app");
+  app.innerHTML = shell(`
+    <div class="bg-white rounded-xl shadow p-4">
+      <div class="flex flex-wrap gap-2 items-end mb-4">
+        <div><label class="text-xs text-gray-400 block">From</label><input id="il-from" type="date" class="border rounded-lg px-3 py-2 text-sm" /></div>
+        <div><label class="text-xs text-gray-400 block">To</label><input id="il-to" type="date" class="border rounded-lg px-3 py-2 text-sm" /></div>
+        <div><label class="text-xs text-gray-400 block">Status</label>
+          <select id="il-status" class="border rounded-lg px-3 py-2 text-sm">
+            <option value="">All</option>
+            <option value="pending">Pending</option>
+            <option value="issued">Issued</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
+        <div class="flex-1 min-w-[200px]"><label class="text-xs text-gray-400 block">Search item / requester</label><input id="il-q" placeholder="e.g. bearing, RAJESH RANA" class="border rounded-lg px-3 py-2 text-sm w-full" /></div>
+        <button id="il-filter" class="bg-navy text-white px-4 py-2 rounded-lg text-sm">Filter</button>
+        <button id="il-download" class="bg-orange text-white px-4 py-2 rounded-lg text-sm font-semibold">Download CSV</button>
+      </div>
+      <div id="il-status-msg" class="text-sm mb-2"></div>
+      <div id="il-table" class="text-gray-500">Loading...</div>
+    </div>
+  `);
+  bindShell();
+
+  function params() {
+    const p = new URLSearchParams();
+    const from = document.getElementById("il-from").value;
+    const to = document.getElementById("il-to").value;
+    const status = document.getElementById("il-status").value;
+    const q = document.getElementById("il-q").value.trim();
+    if (from) p.set("from", from);
+    if (to) p.set("to", to);
+    if (status) p.set("status", status);
+    if (q) p.set("q", q);
+    return p;
+  }
+
+  async function load() {
+    const box = document.getElementById("il-table");
+    try {
+      const data = await api(`/api/issues?${params().toString()}`);
+      box.innerHTML = data.issues.length ? `
+        <div class="overflow-auto max-h-[560px]">
+        <table class="w-full text-sm">
+          <thead class="text-left text-gray-500 border-b sticky top-0 bg-white">
+            <tr><th class="py-2">Item</th><th>Qty</th><th>Issued To</th><th>Purpose / Machine</th><th>Status</th><th>Approved By</th><th>Requested At</th><th>Issued At</th></tr>
+          </thead>
+          <tbody>
+          ${data.issues.map(i => `
+            <tr class="border-b">
+              <td class="py-2">${i.description}<div class="text-xs text-gray-400 font-mono">${i.sap_code}</div></td>
+              <td>${i.qty_requested} ${i.uom||''}</td>
+              <td>${i.requested_by_name}</td>
+              <td class="text-xs">${i.purpose||''}${i.machine_ref?` · ${i.machine_ref}`:''}</td>
+              <td><span class="text-xs px-2 py-0.5 rounded-full ${statusColor(i.status)}">${i.status}</span></td>
+              <td class="text-xs">${i.approved_by_name||'-'}</td>
+              <td class="text-xs">${new Date(i.created_at).toLocaleString()}</td>
+              <td class="text-xs">${i.issued_at ? new Date(i.issued_at).toLocaleString() : '-'}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+        </div>
+        <div class="text-xs text-gray-400 mt-2">Showing latest ${data.issues.length} (max 200) — narrow the filters or use Download CSV for the full range.</div>
+      ` : `<div class="text-gray-400">No matching issue records.</div>`;
+    } catch (e) { box.textContent = "Error: " + e.message; }
+  }
+
+  document.getElementById("il-filter").onclick = load;
+  document.getElementById("il-download").onclick = async () => {
+    const msg = document.getElementById("il-status-msg");
+    msg.textContent = "Preparing download...";
+    try {
+      const res = await fetch(`/api/issues/export?${params().toString()}`, {
+        headers: { Authorization: "Bearer " + state.token },
+      });
+      if (!res.ok) { const d = await res.json().catch(()=>({})); throw new Error(d.error || "Export failed"); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `egstore_issue_log_${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      msg.textContent = "";
+    } catch (e) { msg.innerHTML = `<span class="text-red-600">${e.message}</span>`; }
+  };
+
+  await load();
+}
+
+// ---------------- ROUTER ----------------
+function checkHashRoute() {
+  const m = location.hash.match(/^#\/item\/(.+)$/);
+  if (m) { state.view = "item-detail"; state.selectedItemCode = decodeURIComponent(m[1]); return true; }
+  return false;
+}
+window.addEventListener("hashchange", () => { if (checkHashRoute()) render(); });
+
+function render() {
+  if (!state.token || !state.user) { renderLogin(); return; }
+  checkHashRoute();
+  const views = {
+    dashboard: renderDashboard, items: renderItems, issue: renderIssue,
+    approvals: renderApprovals, indents: renderIndents, users: renderUsers,
+    qrcodes: renderQRCodes, bulkreceipt: renderBulkReceipt, "item-detail": renderItemDetail,
+    issuelog: renderIssueLog,
+  };
+  (views[state.view] || renderDashboard)();
+}
+checkHashRoute();
+render();
+</script>
+</body>
+</html>
