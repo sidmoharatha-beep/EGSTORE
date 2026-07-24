@@ -5,12 +5,12 @@ compatibility_date = "2026-01-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "egstore-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "c15edcf4-0840-4fce-b9ae-622776ac862d"
 
 [ai]
 binding = "AI"

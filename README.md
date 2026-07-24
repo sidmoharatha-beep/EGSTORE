@@ -126,6 +126,47 @@ This regenerates `seed_data.sql` with de-duplicated SAP codes. **Important:** re
 load, tell me and I'll write an `INSERT OR REPLACE` / upsert variant instead of a
 straight re-seed, so you don't wipe stock levels that have moved since the export.
 
+## Fixes applied (July 2026)
+
+Two issues were reported on the live deployment — "pages not responding" and
+"QR codes not generating" — both traced to the same root cause plus one
+routing gap:
+
+1. **QR codes / bulk-receipt Excel parsing failing silently.** The app was
+   loading the `qrcode` and `xlsx` JS libraries from `cdn.jsdelivr.net` at
+   runtime. On a managed/enterprise browser (the kind that shows "Action
+   required" in the toolbar, common on company laptops), IT policy often
+   blocks unlisted CDN domains — the script tag fails, `QRCodeLib`/`XLSX`
+   never get defined, and clicking "Generate Labels" or uploading an Excel
+   file does nothing with no visible error to the user. **Fix:** both
+   libraries are now bundled and served from the app itself
+   (`public/vendor/qrcode.min.js`, `public/vendor/xlsx.min.js`) — zero
+   external network calls at runtime, works on any restricted network.
+   Tailwind is left on its CDN since it loaded fine in your screenshot; if
+   that ever gets blocked too, say so and it can be self-hosted the same way.
+
+2. **`/api/*` requests could be swallowed by static-asset routing.**
+   `wrangler.toml` had `not_found_handling = "single-page-application"`,
+   which returns `index.html` for *any* unmatched path — including API calls,
+   since they don't correspond to a physical file. The app's `fetch()` helper
+   was tolerant of a bad JSON response (defaults to `{}`) rather than
+   surfacing an error, so a page could silently render with no data instead
+   of failing loudly. Since navigation here is hash-based (`#/item/...`),
+   there was never a need for SPA path fallback in the first place — it's
+   removed, and `/api/*` is now pinned with `run_worker_first` so it always
+   reaches the Worker directly.
+
+3. **Logo.** Your EGSTORE mark is now the favicon and appears in the header
+   and login screen (`public/logo-header.png`, `public/favicon*.png`).
+
+### If you update the QR/Excel libraries later
+
+```powershell
+npm install qrcode xlsx esbuild --no-save
+node_modules/.bin/esbuild node_modules/qrcode/lib/browser.js --bundle --minify --format=iife --global-name=QRCodeLib --outfile=public/vendor/qrcode.min.js
+cp node_modules/xlsx/dist/xlsx.full.min.js public/vendor/xlsx.min.js
+```
+
 ## Architecture
 
 ```
