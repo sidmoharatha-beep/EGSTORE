@@ -65,8 +65,8 @@ function renderLogin() {
   const app = document.getElementById("app");
   app.innerHTML = "";
   app.appendChild(el(`
-    <div class="min-h-screen flex items-center justify-center">
-      <div class="bg-white shadow-xl rounded-2xl p-10 w-96">
+    <div class="min-h-screen flex items-center justify-center px-4">
+      <div class="bg-white shadow-xl rounded-2xl p-6 sm:p-10 w-full max-w-sm">
         <div class="text-center mb-6">
           <img src="logo-header.png" alt="EGSTORE" class="w-16 h-16 mx-auto mb-2" />
           <div class="text-3xl font-extrabold navy">EGSTORE</div>
@@ -110,29 +110,52 @@ function shell(contentHtml) {
 
   return `
     <div class="min-h-screen">
-      <header class="bg-navy text-white px-6 py-3 flex items-center justify-between shadow">
-        <div class="flex items-center gap-2">
-          <img src="logo-header.png" alt="EGSTORE" class="w-9 h-9 rounded-full bg-white p-0.5" />
-          <span class="font-extrabold text-xl">EGSTORE</span>
+      <header class="bg-navy text-white px-4 md:px-6 py-3 shadow relative">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <img src="logo-header.png" alt="EGSTORE" class="w-8 h-8 md:w-9 md:h-9 rounded-full bg-white p-0.5" />
+            <span class="font-extrabold text-lg md:text-xl">EGSTORE</span>
+          </div>
+          <nav class="hidden md:flex gap-1">
+            ${nav.map(n => `<button data-nav="${n.id}" class="px-3 py-1.5 rounded-lg text-sm ${state.view===n.id ? 'bg-orange font-semibold' : 'hover:bg-white/10'}">${n.label}</button>`).join("")}
+          </nav>
+          <div class="hidden md:flex items-center gap-3 text-sm">
+            <span>${state.user.name} <span class="opacity-70">(${role.replace('_',' ')})</span></span>
+            <button id="logout-btn" class="bg-white/10 px-3 py-1 rounded-lg hover:bg-white/20">Log out</button>
+          </div>
+          <button id="mobile-menu-btn" class="md:hidden p-2 -mr-2 rounded-lg hover:bg-white/10" aria-label="Menu">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
         </div>
-        <nav class="flex gap-1">
-          ${nav.map(n => `<button data-nav="${n.id}" class="px-3 py-1.5 rounded-lg text-sm ${state.view===n.id ? 'bg-orange font-semibold' : 'hover:bg-white/10'}">${n.label}</button>`).join("")}
-        </nav>
-        <div class="flex items-center gap-3 text-sm">
-          <span>${state.user.name} <span class="opacity-70">(${role.replace('_',' ')})</span></span>
-          <button id="logout-btn" class="bg-white/10 px-3 py-1 rounded-lg hover:bg-white/20">Log out</button>
+        <div id="mobile-menu" class="hidden md:hidden mt-3 pb-1 border-t border-white/20 pt-3">
+          <div class="flex flex-col gap-1">
+            ${nav.map(n => `<button data-nav="${n.id}" class="text-left px-3 py-2.5 rounded-lg text-sm ${state.view===n.id ? 'bg-orange font-semibold' : 'hover:bg-white/10'}">${n.label}</button>`).join("")}
+          </div>
+          <div class="mt-3 pt-3 border-t border-white/20 flex items-center justify-between text-sm">
+            <span>${state.user.name} <span class="opacity-70">(${role.replace('_',' ')})</span></span>
+            <button id="logout-btn-mobile" class="bg-white/10 px-3 py-1.5 rounded-lg hover:bg-white/20">Log out</button>
+          </div>
         </div>
       </header>
-      <main class="p-6 max-w-7xl mx-auto">${contentHtml}</main>
+      <main class="p-4 md:p-6 max-w-7xl mx-auto">${contentHtml}</main>
     </div>
   `;
 }
 
 function bindShell() {
   document.querySelectorAll("[data-nav]").forEach(btn => {
-    btn.onclick = () => { state.view = btn.getAttribute("data-nav"); state.page = 1; render(); };
+    btn.onclick = () => {
+      state.view = btn.getAttribute("data-nav"); state.page = 1;
+      const menu = document.getElementById("mobile-menu");
+      if (menu) menu.classList.add("hidden");
+      render();
+    };
   });
   document.getElementById("logout-btn").onclick = logout;
+  const logoutMobile = document.getElementById("logout-btn-mobile");
+  if (logoutMobile) logoutMobile.onclick = logout;
+  const menuBtn = document.getElementById("mobile-menu-btn");
+  if (menuBtn) menuBtn.onclick = () => document.getElementById("mobile-menu").classList.toggle("hidden");
 }
 
 // ---------------- DASHBOARD ----------------
@@ -699,7 +722,7 @@ async function renderQRCodes() {
         <button id="qr-print" class="hidden bg-navy text-white px-4 py-2 rounded-lg text-sm font-semibold">Print</button>
       </div>
     </div>
-    <div id="qr-print-area" class="mt-6 grid grid-cols-3 gap-4"></div>
+    <div id="qr-print-area" class="mt-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4"></div>
   `);
   bindShell();
   let selected = {};

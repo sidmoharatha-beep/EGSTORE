@@ -95,6 +95,11 @@ export default {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
+    // Everything that isn't an API call is a static asset (index.html, favicon, /vendor/*, etc.)
+    if (!path.startsWith("/api/")) {
+      return env.ASSETS.fetch(request);
+    }
+
     let response;
     try {
       response = await route(request, env, url, path);

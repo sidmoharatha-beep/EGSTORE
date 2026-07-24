@@ -159,6 +159,36 @@ routing gap:
 3. **Logo.** Your EGSTORE mark is now the favicon and appears in the header
    and login screen (`public/logo-header.png`, `public/favicon*.png`).
 
+4. **Deploy error: `assets.run_worker_first` type mismatch.** Your installed
+   Wrangler is v3.114.17, and the array form (`["/api/*"]`) is a Wrangler v4
+   feature — v3 only accepts `true`/`false`. Fixed by using
+   `run_worker_first = true` (works on v3 and v4) and having the Worker itself
+   serve static files via `env.ASSETS.fetch(request)` for any path that isn't
+   `/api/*`. No Wrangler upgrade required, though upgrading later
+   (`npm install --save-dev wrangler@4`) is still worth doing at some point —
+   Cloudflare's warning about v3 going out of date is real.
+
+5. **`node_modules` got committed to GitHub** (that 42 MB push, and the 70 MB
+   `workerd.exe` warning) — it was already tracked in git *before* `.gitignore`
+   was added, so the ignore rule didn't retroactively remove it. Clean it up
+   once from `D:\egstore`:
+   ```powershell
+   git rm -r --cached node_modules
+   git commit -m "Stop tracking node_modules"
+   git push
+   ```
+   `.gitignore` already lists `node_modules/`, so it won't come back.
+
+6. **Mobile responsiveness.** The nav bar had 9 tabs in a single row with no
+   wrap handling — fine on desktop, broken on a phone. It now collapses into
+   a hamburger menu below `md` breakpoint (tap the ☰ icon top-right), the
+   login card no longer overflows narrow screens, and the QR label preview
+   grid adjusts from 2 columns on phones up to 4 on desktop. Data tables
+   (Items, Issue Log, Approvals, Purchase Indents) scroll horizontally on
+   narrow screens rather than breaking layout — standard pattern for
+   dense tabular data on mobile, though if you'd rather have a card-style
+   layout for those on phones specifically, say so and I'll build it.
+
 ### If you update the QR/Excel libraries later
 
 ```powershell
