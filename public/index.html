@@ -112,10 +112,10 @@ function shell(contentHtml) {
     <div class="min-h-screen">
       <header class="bg-navy text-white px-4 md:px-6 py-3 shadow relative">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
+          <button id="logo-home-btn" class="flex items-center gap-2">
             <img src="logo-header.png" alt="EGSTORE" class="w-8 h-8 md:w-9 md:h-9 rounded-full bg-white p-0.5" />
             <span class="font-extrabold text-lg md:text-xl">EGSTORE</span>
-          </div>
+          </button>
           <nav class="hidden md:flex gap-1">
             ${nav.map(n => `<button data-nav="${n.id}" class="px-3 py-1.5 rounded-lg text-sm ${state.view===n.id ? 'bg-orange font-semibold' : 'hover:bg-white/10'}">${n.label}</button>`).join("")}
           </nav>
@@ -145,6 +145,7 @@ function shell(contentHtml) {
 function bindShell() {
   document.querySelectorAll("[data-nav]").forEach(btn => {
     btn.onclick = () => {
+      if (location.hash) history.replaceState(null, "", location.pathname + location.search);
       state.view = btn.getAttribute("data-nav"); state.page = 1;
       const menu = document.getElementById("mobile-menu");
       if (menu) menu.classList.add("hidden");
@@ -156,6 +157,12 @@ function bindShell() {
   if (logoutMobile) logoutMobile.onclick = logout;
   const menuBtn = document.getElementById("mobile-menu-btn");
   if (menuBtn) menuBtn.onclick = () => document.getElementById("mobile-menu").classList.toggle("hidden");
+  const logoBtn = document.getElementById("logo-home-btn");
+  if (logoBtn) logoBtn.onclick = () => {
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    state.view = "dashboard"; state.page = 1;
+    render();
+  };
 }
 
 // ---------------- DASHBOARD ----------------

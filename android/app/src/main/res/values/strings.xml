@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EGSTORE</string>
+    <string name="title_activity_main">EGSTORE</string>
+    <string name="package_name">com.grmtechsolutions.egstore</string>
+    <string name="custom_url_scheme">com.grmtechsolutions.egstore</string>
+</resources>

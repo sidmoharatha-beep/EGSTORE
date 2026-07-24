@@ -1,0 +1,9 @@
+{
+  "appId": "com.grmtechsolutions.egstore",
+  "appName": "EGSTORE",
+  "webDir": "public",
+  "server": {
+    "url": "https://egstore.grmtechnology.workers.dev",
+    "androidScheme": "https"
+  }
+}
